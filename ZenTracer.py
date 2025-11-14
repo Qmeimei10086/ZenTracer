@@ -12,7 +12,7 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout, QTreeView, 
                             QListView, QMenuBar, QMenu, QStatusBar, QAction, QMessageBox, 
                             QFileDialog, QDialog, QLineEdit, QPushButton, QSizePolicy, 
-                            QAbstractItemView)
+                            QAbstractItemView, QHeaderView)
 from PyQt5 import QtCore
 
 APP = None  # type: ZenTracer
@@ -24,47 +24,43 @@ device = None
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
-        MainWindow.resize(1015, 769)
+        MainWindow.resize(1200, 800)
         MainWindow.setMaximumSize(QtCore.QSize(16777214, 16777215))
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QGridLayout(self.centralwidget)
         self.gridLayout.setObjectName("gridLayout")
         
-        # 使用支持复制的自定义视图
         self.treeView = QTreeView(self.centralwidget)
-        sizePolicy = QSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.MinimumExpanding)
+        sizePolicy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.treeView.sizePolicy().hasHeightForWidth())
         self.treeView.setSizePolicy(sizePolicy)
-        # 设置选择属性以支持复制
         self.treeView.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.treeView.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.treeView.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.treeView.setExpandsOnDoubleClick(False)
         self.treeView.setObjectName("treeView")
-        # 启用右键菜单
         self.treeView.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.treeView.setAlternatingRowColors(True)
         self.gridLayout.addWidget(self.treeView, 0, 0, 1, 1)
         
         self.logList = QListView(self.centralwidget)
-        sizePolicy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        sizePolicy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.logList.sizePolicy().hasHeightForWidth())
         self.logList.setSizePolicy(sizePolicy)
-        # 设置选择属性以支持复制
         self.logList.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.logList.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.logList.setObjectName("logList")
-        # 启用右键菜单
         self.logList.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.gridLayout.addWidget(self.logList, 1, 0, 1, 1)
         
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
-        self.menubar.setGeometry(QtCore.QRect(0, 0, 1015, 23))
+        self.menubar.setGeometry(QtCore.QRect(0, 0, 1200, 23))
         self.menubar.setObjectName("menubar")
         self.menuMenu = QMenu(self.menubar)
         self.menuMenu.setObjectName("menuMenu")
@@ -114,7 +110,7 @@ class Ui_MainWindow(object):
 
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
-        MainWindow.setWindowTitle(_translate("MainWindow", "ZenTracer"))
+        MainWindow.setWindowTitle(_translate("MainWindow", "ZenTracer - Enhanced"))
         self.menuMenu.setTitle(_translate("MainWindow", "File"))
         self.menuAction.setTitle(_translate("MainWindow", "Action"))
         self.menuHelp.setTitle(_translate("MainWindow", "Help"))
@@ -169,93 +165,89 @@ def FridaReceive(message, data):
             cmd = packet['cmd']
             data = packet['data']
             if cmd == 'log':
-                # 输出到终端和GUI
                 terminal_msg = f"[{timestamp}] [LOG] {data}"
                 print(terminal_msg)
                 APP.log(data)
             elif cmd == 'enter':
-                tid, tName, cls, method, args = data
-                # 输出到终端和GUI
+                tid, tName, cls, method, args, call_stack = data
                 terminal_msg = f"[{timestamp}] [ENTER] {cls}.{method}({args}) [Thread: {tid}-{tName}]"
                 print(terminal_msg)
+                if call_stack:
+                    terminal_msg += f"\nCall Stack:\n{call_stack}"
                 APP.method_entry(tid, tName, cls, method, args)
             elif cmd == 'exit':
                 tid, retval = data
-                # 输出到终端和GUI
                 terminal_msg = f"[{timestamp}] [EXIT] Return: {retval} [Thread: {tid}]"
                 print(terminal_msg)
                 APP.method_exit(tid, retval)
+            elif cmd == 'detailed_log':
+                terminal_msg = f"[{timestamp}] [DETAIL] {data}"
+                print(terminal_msg)
         else:
-            # 其他send消息也输出到终端
             terminal_msg = f"[{timestamp}] [SEND] {message.get('payload', '')}"
             print(terminal_msg)
     elif message['type'] == 'error':
-        # 错误消息输出到终端
         terminal_msg = f"[{timestamp}] [ERROR] {message.get('stack', message.get('description', ''))}"
         print(terminal_msg)
     else:
-        # 其他类型消息
         terminal_msg = f"[{timestamp}] [{message['type'].upper()}] {message}"
         print(terminal_msg)
 
 
-class TraceItem(QStandardItem):
-    def __init__(self, clazz, method, args, parent_item, retval=None, *__args):
+class TraceItem:
+    def __init__(self, clazz, method, args, parent_item=None, retval=None):
+        self.clazz = clazz
         self.method = method
         self.args = args
         self.retval = retval
-        self.clazz = clazz
         self.parent_item = parent_item
-        super().__init__(str(self), *__args)
-        # 设置项目为可选择但不可编辑
-        self.setEditable(False)
+        self.child_items = []
+        
+        # 创建三个列的项目
+        self.method_item = QStandardItem(self._format_method_text())
+        self.args_item = QStandardItem(self._format_text(args))
+        self.retval_item = QStandardItem(self._format_text(retval))
+        
+        # 设置项目为不可编辑
+        self.method_item.setEditable(False)
+        self.args_item.setEditable(False)
+        self.retval_item.setEditable(False)
+        
+        # 如果提供了父项目，将当前项目添加到父项目中
         if parent_item:
-            parent_item.appendRow(self)
-        self.flush_text()
+            parent_item.appendRow([self.method_item, self.args_item, self.retval_item])
+            if hasattr(parent_item, 'child_items'):
+                parent_item.child_items.append(self)
 
-    def __str__(self):
-        s = '{}.{}'.format(self.clazz, self.method)
-        return s
+    def _format_method_text(self):
+        return f"{self.clazz}.{self.method}"
 
-    def flush_text(self):
-        self.setText(str(self))
-        if isinstance(self.parent_item, QStandardItem):
-            parent_model = self.parent_item.model()
-            if parent_model and self.row() >= 0:
-                if parent_model.columnCount() <= 1:
-                    parent_model.setColumnCount(3)
-                args_item = QStandardItem(str(self.args))
-                args_item.setEditable(False)  # 不可编辑但可选择
-                parent_model.setItem(self.row(), 1, args_item)
-                retval_item = QStandardItem(str(self.retval))
-                retval_item.setEditable(False)  # 不可编辑但可选择
-                parent_model.setItem(self.row(), 2, retval_item)
-        elif isinstance(self.parent_item, QStandardItemModel):
-            model = self.parent_item
-            if model.columnCount() <= 1:
-                model.setColumnCount(3)
-            args_item = QStandardItem(str(self.args))
-            args_item.setEditable(False)
-            model.setItem(self.row(), 1, args_item)
-            retval_item = QStandardItem(str(self.retval))
-            retval_item.setEditable(False)
-            model.setItem(self.row(), 2, retval_item)
-
-    def set_method(self, me):
-        self.method = me
-        self.flush_text()
-
-    def set_class(self, clazz):
-        self.clazz = clazz
-        self.flush_text()
+    def _format_text(self, text):
+        """格式化文本，确保显示对齐"""
+        if text is None:
+            return ""
+        if isinstance(text, str):
+            # 如果文本太长，进行截断
+            if len(text) > 100:
+                return text[:97] + "..."
+            return text
+        return str(text)
 
     def set_args(self, args):
         self.args = args
-        self.flush_text()
+        self.args_item.setText(self._format_text(args))
 
     def set_retval(self, retval):
         self.retval = retval
-        self.flush_text()
+        self.retval_item.setText(self._format_text(retval))
+
+    def add_child(self, child_item):
+        """添加子项目"""
+        self.child_items.append(child_item)
+
+    def get_method_item(self):
+        """返回方法列的项目，用于TreeView显示"""
+        return self.method_item
 
 
 class ListWindow(QDialog):
@@ -282,7 +274,7 @@ class ListWindow(QDialog):
         
         for item in self.data:
             list_item = QStandardItem(item)
-            list_item.setEditable(False)  # 列表项不可编辑
+            list_item.setEditable(False)
             model.appendRow(list_item)
 
     def setupAction(self):
@@ -322,21 +314,22 @@ def start_trace(app):
             print(f"[*] Attaching to process: {pid}")
             
             session = device.attach(pid)
-            # Frida 16.x 使用 enable_child_gating
             if hasattr(session, 'enable_child_gating'):
                 session.enable_child_gating()
             
-            # 读取JavaScript代码
             try:
-                with open('trace.js', 'r', encoding='utf-8') as f:
+                with open('trace_enhanced.js', 'r', encoding='utf-8') as f:
                     source = f.read()
             except Exception as e:
-                error_msg = f"Error: Cannot read trace.js file: {str(e)}"
-                app.log(error_msg)
-                print(error_msg)
-                return
-                
-            # 替换正则表达式
+                try:
+                    with open('trace.js', 'r', encoding='utf-8') as f:
+                        source = f.read()
+                except Exception as e2:
+                    error_msg = f"Error: Cannot read trace.js file: {str(e2)}"
+                    app.log(error_msg)
+                    print(error_msg)
+                    return
+            
             source = source.replace('{MATCHREGEX}', json.dumps(app.match_regex_list))\
                           .replace("{BLACKREGEX}", json.dumps(app.black_regex_list))
             
@@ -363,10 +356,8 @@ def start_trace(app):
         device = frida.get_usb_device()
         print(f"[*] Device: {device.name}")
         
-        # 设置子进程监听
         device.on("child-added", _on_child_added)
         
-        # 获取目标应用
         target_app = None
         try:
             application = device.get_frontmost_application()
@@ -384,7 +375,6 @@ def start_trace(app):
             print(f"[*] Could not get frontmost application: {e}")
             target_name = None
         
-        # 枚举并附加到进程
         print("[*] Enumerating processes...")
         processes = device.enumerate_processes()
         print(f"[*] Found {len(processes)} processes")
@@ -432,31 +422,30 @@ class ZenTracerWindow(QMainWindow):
     def __init__(self, app):
         super().__init__()
         self.app = app
-        # 延迟设置右键菜单，确保UI已经初始化完成
         QtCore.QTimer.singleShot(100, self.setupContextMenu)
 
     def setupContextMenu(self):
         """设置右键菜单"""
         try:
-            # TreeView右键菜单
             self.tree_context_menu = QMenu(self)
             self.copy_tree_action = QAction("Copy", self)
             self.copy_tree_action.triggered.connect(self.copyTreeSelection)
             self.tree_context_menu.addAction(self.copy_tree_action)
             
-            # ListView右键菜单
+            self.resize_columns_action = QAction("Auto Resize Columns", self)
+            self.resize_columns_action.triggered.connect(self.autoResizeColumns)
+            self.tree_context_menu.addAction(self.resize_columns_action)
+            
             self.list_context_menu = QMenu(self)
             self.copy_list_action = QAction("Copy", self)
             self.copy_list_action.triggered.connect(self.copyListSelection)
             self.list_context_menu.addAction(self.copy_list_action)
             
-            # 连接右键菜单信号
             if hasattr(self.app.ui, 'treeView') and self.app.ui.treeView:
                 self.app.ui.treeView.customContextMenuRequested.connect(self.showTreeContextMenu)
             if hasattr(self.app.ui, 'logList') and self.app.ui.logList:
                 self.app.ui.logList.customContextMenuRequested.connect(self.showListContextMenu)
                 
-            # 设置键盘快捷键
             if hasattr(self.app.ui, 'treeView') and self.app.ui.treeView:
                 self.app.ui.treeView.keyPressEvent = self.treeViewKeyPressEvent
             if hasattr(self.app.ui, 'logList') and self.app.ui.logList:
@@ -467,12 +456,23 @@ class ZenTracerWindow(QMainWindow):
         except Exception as e:
             print(f"[!] Error setting up context menu: {e}")
 
+    def autoResizeColumns(self):
+        """自动调整列宽"""
+        try:
+            if hasattr(self.app.ui, 'treeView') and self.app.ui.treeView:
+                self.app.ui.treeView.header().setSectionResizeMode(QHeaderView.ResizeToContents)
+                QtCore.QTimer.singleShot(50, lambda: self.app.ui.treeView.header().setSectionResizeMode(0, QHeaderView.Interactive))
+                print("[*] Columns auto-resized")
+        except Exception as e:
+            print(f"[!] Error resizing columns: {e}")
+
     def treeViewKeyPressEvent(self, event):
         """处理TreeView键盘事件"""
         if event.key() == QtCore.Qt.Key_C and event.modifiers() == QtCore.Qt.ControlModifier:
             self.copyTreeSelection()
+        elif event.key() == QtCore.Qt.Key_R and event.modifiers() == QtCore.Qt.ControlModifier:
+            self.autoResizeColumns()
         else:
-            # 调用原始的keyPressEvent
             QTreeView.keyPressEvent(self.app.ui.treeView, event)
 
     def logListKeyPressEvent(self, event):
@@ -480,7 +480,6 @@ class ZenTracerWindow(QMainWindow):
         if event.key() == QtCore.Qt.Key_C and event.modifiers() == QtCore.Qt.ControlModifier:
             self.copyListSelection()
         else:
-            # 调用原始的keyPressEvent
             QListView.keyPressEvent(self.app.ui.logList, event)
 
     def showTreeContextMenu(self, position):
@@ -498,7 +497,6 @@ class ZenTracerWindow(QMainWindow):
             if not selected_indexes:
                 return
                 
-            # 按行组织数据
             rows_data = {}
             for index in selected_indexes:
                 row = index.row()
@@ -508,7 +506,6 @@ class ZenTracerWindow(QMainWindow):
                 text = self.app.ui.treeView.model().data(index, QtCore.Qt.DisplayRole) or ""
                 rows_data[row][column] = text
             
-            # 构建复制文本
             copied_text = ""
             for row in sorted(rows_data.keys()):
                 row_data = rows_data[row]
@@ -517,7 +514,6 @@ class ZenTracerWindow(QMainWindow):
                     row_text.append(str(row_data[col]))
                 copied_text += "\t".join(row_text) + "\n"
             
-            # 复制到剪贴板
             clipboard = QApplication.clipboard()
             clipboard.setText(copied_text.strip())
             print("[*] Tree selection copied to clipboard")
@@ -532,13 +528,11 @@ class ZenTracerWindow(QMainWindow):
             if not selected_indexes:
                 return
                 
-            # 构建复制文本
             copied_text = ""
             for index in selected_indexes:
                 text = self.app.ui.logList.model().data(index, QtCore.Qt.DisplayRole) or ""
                 copied_text += text + "\n"
             
-            # 复制到剪贴板
             clipboard = QApplication.clipboard()
             clipboard.setText(copied_text.strip())
             print("[*] Logs copied to clipboard")
@@ -567,9 +561,10 @@ class ZenTracerWindow(QMainWindow):
 
     def about_onClick(self):
         QMessageBox.about(self, "About",
-                         "ZenTracer: Android Tracer based-on frida \nAuthor: github.com/hluwa\n"
+                         "ZenTracer: Enhanced Android Tracer based-on frida \nAuthor: github.com/hluwa\n"
+                         "Enhanced with r0tracer features\n"
                          "Frida Version: 16.4.2\n"
-                         "With copy support and terminal logging")
+                         "Features: Better column alignment, auto-resize, copy support")
 
     def import_jobf_onClick(self):
         jobfile, _ = QFileDialog.getOpenFileName(self, 'Import jadx job file', '', 'Job file (*.jobf)')
@@ -593,12 +588,12 @@ class ZenTracerWindow(QMainWindow):
                             cls = cls[cls.rfind('$') + 1:]
                         cls_maps[pkg + cls] = pkg + dest
             
-            # 应用类名映射
             updated_count = 0
             for tid in self.app.thread_map:
                 for item in self.app.thread_map[tid]['list']:
                     if isinstance(item, TraceItem) and item.clazz in cls_maps:
-                        item.set_class(cls_maps[item.clazz])
+                        item.clazz = cls_maps[item.clazz]
+                        item.method_item.setText(item._format_method_text())
                         updated_count += 1
             
             print(f"[*] Updated {updated_count} class names from job file")
@@ -632,7 +627,7 @@ class ZenTracerWindow(QMainWindow):
             for tid in self.app.thread_map:
                 thread_info = self.app.thread_map[tid]
                 if thread_info['list']:
-                    tree_key = thread_info['list'][0].text()
+                    tree_key = thread_info['list'][0].method_item.text()
                     export['tree'][tree_key] = gen_tree(thread_info['list'][0])
             
             with open(jobfile, 'w', encoding='utf-8') as f:
@@ -655,12 +650,10 @@ class ZenTracerWindow(QMainWindow):
             with open(jobfile, 'r', encoding='utf-8') as f:
                 export = json.load(f)
             
-            # 清空现有数据
             self.app.match_regex_list.clear()
             self.app.black_regex_list.clear()
             self.clean_onClick()
             
-            # 导入正则表达式
             if 'match_regex' in export:
                 self.app.match_regex_list.extend(export['match_regex'])
                 self.app.match_regex_dialog.setupList()
@@ -671,7 +664,6 @@ class ZenTracerWindow(QMainWindow):
                 self.app.black_regex_dialog.setupList()
                 print(f"[*] Imported {len(export['black_regex'])} black regex patterns")
             
-            # 导入调用树
             tree_count = 0
             if 'tree' in export:
                 for thread_key in export['tree']:
@@ -700,7 +692,7 @@ def put_tree(app, tid, tname, item):
 
 
 def gen_tree(item):
-    if isinstance(item, TraceItem):
+    if hasattr(item, 'clazz') and hasattr(item, 'method'):
         res = {
             'clazz': item.clazz,
             'method': item.method,
@@ -708,20 +700,11 @@ def gen_tree(item):
             'child': [],
             'retval': item.retval
         }
-        for i in range(item.rowCount()):
-            child_item = item.child(i)
-            if child_item:
-                res['child'].append(gen_tree(child_item))
-        return res
-    elif isinstance(item, QStandardItem):
-        res = []
-        for i in range(item.rowCount()):
-            child_item = item.child(i)
-            if child_item:
-                res.append(gen_tree(child_item))
+        for child_item in item.child_items:
+            res['child'].append(gen_tree(child_item))
         return res
     else:
-        return []
+        return {}
 
 
 class ZenTracer:
@@ -729,7 +712,7 @@ class ZenTracer:
         global APP
         APP = self
         
-        print("[*] Starting ZenTracer...")
+        print("[*] Starting Enhanced ZenTracer...")
         print(f"[*] Python version: {sys.version}")
         print(f"[*] Frida version: {frida.__version__}")
         
@@ -737,7 +720,6 @@ class ZenTracer:
         self.ui = Ui_MainWindow()
         self.window = ZenTracerWindow(self)
         
-        # 尝试设置图标
         try:
             self.window.setWindowIcon(QIcon('icon.png'))
         except:
@@ -753,9 +735,11 @@ class ZenTracer:
         self.match_regex_dialog = ListWindow(self.match_regex_list, "Match RegEx")
         self.window.show()
         
-        print("[*] ZenTracer GUI initialized successfully")
+        print("[*] Enhanced ZenTracer GUI initialized successfully")
         print("[*] Ready to start tracing")
         print("[*] Copy support enabled: Use Ctrl+C or right-click to copy selected items")
+        print("[*] Auto-resize columns: Use Ctrl+R or right-click -> 'Auto Resize Columns'")
+        print("[*] Enhanced tracing features: call stack, field inspection, better argument handling")
         
         QtCore.QTimer.singleShot(100, lambda: self.ui.logList.scrollToBottom())
         
@@ -773,35 +757,80 @@ class ZenTracer:
     def setupTreeModel(self):
         self.ui.logList.setModel(QStandardItemModel(self.ui.logList))
         model = QStandardItemModel(self.ui.treeView)
-        model.setHorizontalHeaderLabels(['method', 'args', 'retval'])
+        model.setHorizontalHeaderLabels(['Method', 'Arguments', 'Return Value'])
         self.ui.treeView.setModel(model)
-        self.ui.treeView.setColumnWidth(0, 500)
-        self.ui.treeView.setColumnWidth(1, 300)
+        
+        header = self.ui.treeView.header()
+        self.ui.treeView.setColumnWidth(0, 400)
+        self.ui.treeView.setColumnWidth(1, 350)
+        self.ui.treeView.setColumnWidth(2, 300)
+        
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        
+        self.ui.treeView.setAlternatingRowColors(True)
+        
+        font = self.ui.treeView.font()
+        font.setFamily("Courier New")
+        self.ui.treeView.setFont(font)
 
     def method_entry(self, tid, tname, clazz, method, args):
         if tid not in self.thread_map:
-            tItem = QStandardItem('{} - {}'.format(tid, tname))
-            tItem.setEditable(False)  # 不可编辑
-            self.ui.treeView.model().appendRow(tItem)
+            # 创建线程根节点
+            thread_method_item = QStandardItem(f'{tid} - {tname}')
+            thread_args_item = QStandardItem("")
+            thread_retval_item = QStandardItem("")
+            
+            thread_method_item.setEditable(False)
+            thread_args_item.setEditable(False)
+            thread_retval_item.setEditable(False)
+            
+            self.ui.treeView.model().appendRow([thread_method_item, thread_args_item, thread_retval_item])
+            
+            # 为线程根节点创建一个特殊的TraceItem
+            thread_trace_item = TraceItem("Thread", f"{tid}-{tname}", "", None)
+            thread_trace_item.method_item = thread_method_item
+            thread_trace_item.args_item = thread_args_item
+            thread_trace_item.retval_item = thread_retval_item
+            
             self.thread_map[tid] = {
-                'current': tItem,
-                'list': [tItem]
+                'stack': [thread_trace_item],  # 调用栈，栈顶是当前活动的方法
+                'root_item': thread_trace_item,  # 线程根节点
+                'list': [thread_trace_item]  # 线程中的所有TraceItem
             }
         
-        item = TraceItem(clazz, method, args, parent_item=self.thread_map[tid]['current'])
-        self.thread_map[tid]['current'] = item
-        self.thread_map[tid]['list'].append(item)
+        thread_info = self.thread_map[tid]
+        
+        # 获取当前栈顶项作为父项
+        parent_item = thread_info['stack'][-1] if thread_info['stack'] else thread_info['root_item']
+        
+        # 创建新的TraceItem
+        trace_item = TraceItem(clazz, method, args, parent_item.method_item)
+        
+        # 将新项添加到调用栈和列表中
+        thread_info['stack'].append(trace_item)
+        thread_info['list'].append(trace_item)
+        
+        # 自动展开新添加的项目
+        index = self.ui.treeView.model().indexFromItem(trace_item.method_item)
+        self.ui.treeView.expand(index)
+        
+        # 更新父项的child_items
+        parent_item.child_items.append(trace_item)
 
     def method_exit(self, tid, retval):
         if tid in self.thread_map:
-            current_item = self.thread_map[tid]['current']
-            if current_item:
+            thread_info = self.thread_map[tid]
+            
+            if len(thread_info['stack']) > 1:  # 确保栈中至少有一个方法（不包括线程根节点）
+                # 弹出当前项
+                current_item = thread_info['stack'].pop()
+                
+                # 设置返回值
                 current_item.set_retval(retval)
-                parent = current_item.parent()
-                if isinstance(parent, QStandardItem):
-                    self.thread_map[tid]['current'] = parent
-                else:
-                    self.thread_map[tid]['current'] = self.thread_map[tid]['list'][0]
+                
+                print(f"[*] Set return value for {current_item.clazz}.{current_item.method}: {retval}")
 
     def log(self, text):
         """记录日志到GUI和终端"""
@@ -811,7 +840,7 @@ class ZenTracer:
         model = self.ui.logList.model()
         if model:
             item = QStandardItem(gui_text)
-            item.setEditable(False)  # 日志项不可编辑
+            item.setEditable(False)
             model.insertRow(0, item)
             self.ui.logList.scrollToBottom()
 
